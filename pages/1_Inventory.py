@@ -155,7 +155,7 @@ def calculate_inventory_recommendations(df, predictions):
 def main_inventory_dashboard():
     # Display logo
     try:
-        st.sidebar.image('logo.png', width=200)
+        st.sidebar.image('images/logo.png', width=200)
     except:
         pass
     
