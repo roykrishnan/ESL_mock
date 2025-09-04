@@ -179,7 +179,7 @@ def main_smart_dashboard():
     
     # Sidebar information
     try:
-        st.sidebar.image("logo.png", width=200)
+        st.sidebar.image('logo.png', width=150)
     except:
         pass
     
