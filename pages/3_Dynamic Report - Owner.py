@@ -4,326 +4,653 @@ import plotly.express as px
 import plotly.graph_objects as go
 import numpy as np
 from datetime import datetime, date, timedelta
+from scipy import stats
+import json
+import random
 
-# Initialize mock inventory data
+# Load historical data to establish priors
 @st.cache_data
-def initialize_mock_inventory():
-    """Initialize mock inventory data for bakery items"""
-    bakery_items = [
-        'Croissant', 'Baguette', 'Sourdough Bread', 'Chocolate Chip Muffin', 
-        'Blueberry Muffin', 'Danish', 'Donut', 'Scone', 'Bagel', 'Cinnamon Roll',
-        'Apple Pie', 'Chocolate Cake', 'Vanilla Cupcake', 'Brownie', 'Cookie'
-    ]
+def load_historical_data():
+    """Load historical data to establish smart predictions"""
+    try:
+        df = pd.read_csv('Bakery.csv')
+        df['DateTime'] = pd.to_datetime(df['DateTime'])
+        df['Date'] = df['DateTime'].dt.date
+        return df
+    except Exception as e:
+        st.error(f"Error loading historical data: {str(e)}")
+        return pd.DataFrame()
+
+# Initialize inventory data
+def initialize_inventory(df):
+    """Initialize mock inventory data based on historical items"""
+    if df.empty:
+        return {}
     
-    inventory_data = {}
-    for item in bakery_items:
-        # Generate realistic starting inventory
-        current_stock = np.random.randint(15, 50)
-        max_capacity = np.random.randint(80, 120)
-        reorder_point = np.random.randint(8, 15)
+    unique_items = df['Items'].unique()
+    inventory = {}
+    
+    for item in unique_items:
+        # Mock initial inventory levels (you can adjust these)
+        initial_stock = random.randint(15, 50)  # Random initial stock between 15-50
+        min_threshold = random.randint(5, 12)   # Low stock threshold
+        max_capacity = initial_stock + random.randint(20, 40)  # Maximum capacity
         
-        inventory_data[item] = {
-            'current_stock': current_stock,
+        inventory[item] = {
+            'current_stock': initial_stock,
+            'min_threshold': min_threshold,
             'max_capacity': max_capacity,
-            'reorder_point': reorder_point,
-            'last_updated': datetime.now(),
-            'sales_today': 0
+            'reorder_point': min_threshold,  # Add this required key
+            'last_restocked': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'times_restocked_today': 0
         }
     
-    return inventory_data
+    return inventory
 
-# Update inventory when items are sold
-def sell_item(item_name, quantity):
-    """Reduce inventory when items are sold"""
-    if item_name in st.session_state.inventory:
-        current = st.session_state.inventory[item_name]['current_stock']
-        new_stock = max(0, current - quantity)
-        
-        st.session_state.inventory[item_name]['current_stock'] = new_stock
-        st.session_state.inventory[item_name]['sales_today'] += quantity
-        st.session_state.inventory[item_name]['last_updated'] = datetime.now()
-        
-        return new_stock
-    return 0
-
-# Add inventory when restocking
-def add_inventory(item_name, quantity):
-    """Add inventory when restocking"""
-    if item_name in st.session_state.inventory:
-        current = st.session_state.inventory[item_name]['current_stock']
-        max_cap = st.session_state.inventory[item_name]['max_capacity']
-        new_stock = min(max_cap, current + quantity)
-        
-        st.session_state.inventory[item_name]['current_stock'] = new_stock
-        st.session_state.inventory[item_name]['last_updated'] = datetime.now()
-        
-        return new_stock
-    return 0
-
-# Get inventory status for alerts
-def get_inventory_status():
-    """Analyze inventory status and generate alerts"""
-    if 'inventory' not in st.session_state:
-        return [], [], []
+# Initialize smart predictions from historical data
+def initialize_smart_predictions(df):
+    """Calculate smart inventory predictions for each item based on historical data"""
+    if df.empty:
+        return {}
     
+    # Calculate daily sales for each item
+    daily_sales = df.groupby(['Date', 'Items']).size().reset_index(name='Units_Sold')
+    
+    predictions = {}
+    for item in daily_sales['Items'].unique():
+        item_sales = daily_sales[daily_sales['Items'] == item]['Units_Sold']
+        
+        # Use statistical analysis to create smart predictions
+        sample_mean = item_sales.mean()
+        sample_var = item_sales.var()
+        
+        if sample_var > 0 and sample_mean > 0:
+            # Statistical parameters for smart predictions
+            beta = sample_mean / sample_var
+            alpha = sample_mean * beta
+        else:
+            # Default values for new items
+            alpha = 1.0
+            beta = 1.0
+        
+        predictions[item] = {
+            'alpha': alpha,
+            'beta': beta,
+            'historical_mean': sample_mean,
+            'historical_samples': len(item_sales),
+            'last_updated': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        }
+    
+    return predictions
+
+# Update predictions with new sales data
+def update_predictions(prior_alpha, prior_beta, new_sales, time_elapsed_hours=1):
+    """Update smart predictions with new sales information"""
+    
+    updated_alpha = prior_alpha + new_sales
+    updated_beta = prior_beta + (time_elapsed_hours / 24)
+    
+    return updated_alpha, updated_beta
+
+# Calculate current inventory recommendations
+def calculate_smart_recommendations(predictions, confidence_level=0.95):
+    """Calculate inventory recommendations based on current smart predictions"""
+    recommendations = []
+    
+    for item, params in predictions.items():
+        alpha = params['alpha']
+        beta = params['beta']
+        
+        # Expected daily demand
+        expected_daily_demand = alpha / beta
+        
+        # Conservative and optimistic estimates
+        conservative_estimate = stats.gamma.ppf((1 - confidence_level) / 2, alpha, scale=1/beta)
+        optimistic_estimate = stats.gamma.ppf((1 + confidence_level) / 2, alpha, scale=1/beta)
+        
+        # Recommended stock (be prepared for higher demand)
+        recommended_stock = optimistic_estimate
+        
+        recommendations.append({
+            'Item': item,
+            'Expected_Daily_Sales': expected_daily_demand,
+            'Conservative_Estimate': conservative_estimate,
+            'Optimistic_Estimate': optimistic_estimate,
+            'Recommended_Daily_Stock': recommended_stock,
+            'Confidence_Level': confidence_level,
+            'Last_Updated': params['last_updated']
+        })
+    
+    return pd.DataFrame(recommendations)
+
+# Inventory management functions
+def get_low_stock_items(inventory):
+    """Get items that are running low on stock"""
     low_stock = []
-    out_of_stock = []
-    well_stocked = []
-    
-    for item, data in st.session_state.inventory.items():
-        current = data['current_stock']
-        reorder = data['reorder_point']
-        
-        if current == 0:
-            out_of_stock.append(item)
-        elif current <= reorder:
-            low_stock.append(item)
-        else:
-            well_stocked.append(item)
-    
-    return low_stock, out_of_stock, well_stocked
+    for item, data in inventory.items():
+        if data['current_stock'] <= data['min_threshold']:
+            low_stock.append({
+                'Item': item,
+                'Current_Stock': data['current_stock'],
+                'Min_Threshold': data['min_threshold'],
+                'Status': 'CRITICAL' if data['current_stock'] <= data['min_threshold'] * 0.5 else 'LOW'
+            })
+    return low_stock
 
-# Create inventory overview chart
-def create_inventory_chart():
-    """Create visual chart of current inventory levels"""
-    if 'inventory' not in st.session_state:
-        return go.Figure()
-    
-    items = []
-    current_stock = []
-    reorder_points = []
-    colors = []
-    
-    for item, data in st.session_state.inventory.items():
-        items.append(item)
-        current_stock.append(data['current_stock'])
-        reorder_points.append(data['reorder_point'])
-        
-        # Color code based on stock level
-        if data['current_stock'] == 0:
-            colors.append('red')
-        elif data['current_stock'] <= data['reorder_point']:
-            colors.append('orange')
-        else:
-            colors.append('green')
-    
-    fig = go.Figure()
-    
-    # Add current stock bars
-    fig.add_trace(go.Bar(
-        x=items,
-        y=current_stock,
-        name='Current Stock',
-        marker_color=colors,
-        text=current_stock,
-        textposition='outside'
-    ))
-    
-    # Add reorder point line
-    fig.add_trace(go.Scatter(
-        x=items,
-        y=reorder_points,
-        mode='lines+markers',
-        name='Reorder Point',
-        line=dict(color='red', dash='dash'),
-        marker=dict(color='red', size=6)
-    ))
-    
-    fig.update_layout(
-        title='Current Inventory Levels',
-        xaxis_title='Items',
-        yaxis_title='Quantity',
-        height=500,
-        xaxis_tickangle=45,
-        showlegend=True
-    )
-    
-    return fig
+def restock_item(inventory, item_name, quantity):
+    """Restock an inventory item"""
+    if item_name in inventory:
+        old_stock = inventory[item_name]['current_stock']
+        new_stock = min(old_stock + quantity, inventory[item_name]['max_capacity'])
+        inventory[item_name]['current_stock'] = new_stock
+        inventory[item_name]['last_restocked'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        inventory[item_name]['times_restocked_today'] += 1
+        return new_stock - old_stock  # Actual quantity added
+    return 0
 
-# Main inventory dashboard
-def main_inventory_tracker():
-    # Display logo
+def update_inventory_after_sale(inventory, item_name, quantity_sold):
+    """Update inventory levels after a sale"""
+    if item_name in inventory:
+        inventory[item_name]['current_stock'] = max(0, inventory[item_name]['current_stock'] - quantity_sold)
+
+# Main smart inventory dashboard
+def main_smart_dashboard():
+    st.title("Sweet & Savory Bakery - Smart Inventory Tracker")
+    st.markdown("*Real-time inventory recommendations that learn from your daily sales*")
+    
+    # Load historical data first
+    historical_df = load_historical_data()
+    
+    if historical_df.empty:
+        st.error("No historical data available for smart predictions.")
+        return
+    
+    # Initialize session state properly
+    if 'initialized' not in st.session_state:
+        historical_predictions = initialize_smart_predictions(historical_df)
+        st.session_state.smart_predictions = historical_predictions.copy()
+        st.session_state.inventory = initialize_inventory(historical_df)
+        st.session_state.initialized = True
+        st.session_state.daily_sales_log = []
+    
+    # Now safely access session state
+    predictions = st.session_state.smart_predictions
+    inventory = st.session_state.inventory
+    
+    # Sidebar information
     try:
-        st.sidebar.image("/Users/rohitkrishnan/Desktop/Assesments:Projects/ESL/BakeryDash/images/logo.png", width=150)
+        st.sidebar.image("logo.png", width=200)
     except:
         pass
     
-    st.title("Sweet & Savory Bakery - Inventory Tracker")
-    st.markdown("*Real-time inventory management with visual tracking and alerts*")
-    
-    # Initialize inventory if not exists
-    if 'inventory' not in st.session_state:
-        st.session_state.inventory = initialize_mock_inventory()
-    
-    # Sidebar information
-    st.sidebar.title("Inventory Management")
-    st.sidebar.write("**Features:**")
-    st.sidebar.write("• Real-time stock tracking")
-    st.sidebar.write("• Visual inventory charts")
-    st.sidebar.write("• Low stock alerts")
-    st.sidebar.write("• Easy sell/restock interface")
+    st.sidebar.title("How This Works")
+    st.sidebar.write("**Smart Learning System**")
+    st.sidebar.write("This system learns from your sales patterns and gets smarter over time.")
     st.sidebar.write("")
+    st.sidebar.write("**What it does:**")
+    st.sidebar.write("1. Analyzes your historical sales")
+    st.sidebar.write("2. Records today's sales as you make them")
+    st.sidebar.write("3. Updates recommendations in real-time")
+    st.sidebar.write("4. Tracks inventory levels and alerts for low stock")
+    st.sidebar.write("5. Helps you stock the right amounts")
+    st.sidebar.write("")
+    st.sidebar.write("**The more you use it, the better it gets!**")
     
-    if st.sidebar.button("Reset Inventory"):
-        st.session_state.inventory = initialize_mock_inventory()
+    # Reset button
+    if st.sidebar.button("Reset to Original Recommendations"):
+        historical_predictions = initialize_smart_predictions(historical_df)
+        st.session_state.smart_predictions = historical_predictions.copy()
+        st.session_state.inventory = initialize_inventory(historical_df)
+        st.session_state.daily_sales_log = []
         st.rerun()
     
-    # Get current status
-    low_stock, out_of_stock, well_stocked = get_inventory_status()
+    # DYNAMIC INVENTORY TRACKER SECTION
+    st.subheader("Live Inventory Tracker")
     
-    # Summary metrics
-    st.subheader("Inventory Overview")
+    # Get low stock items
+    low_stock_items = get_low_stock_items(inventory)
+    
+    # Alert for low stock items
+    if low_stock_items:
+        st.error(f"Warning: {len(low_stock_items)} items running low!")
+        
+        # Create alerts
+        for item_info in low_stock_items:
+            status_color = "Red Alert" if item_info['Status'] == 'CRITICAL' else "Yellow Alert"
+            st.warning(f"{status_color} **{item_info['Item']}**: {item_info['Current_Stock']} left (minimum: {item_info['Min_Threshold']})")
+    else:
+        st.success("All items are adequately stocked!")
+    
+    # Inventory overview
     col1, col2, col3, col4 = st.columns(4)
     
+    total_items = len(inventory)
+    total_stock = sum([data['current_stock'] for data in inventory.values()])
+    low_stock_count = len(low_stock_items)
+    critical_stock_count = len([item for item in low_stock_items if item['Status'] == 'CRITICAL'])
+    
     with col1:
-        total_items = len(st.session_state.inventory)
-        st.metric("Total Items", total_items)
-    
+        st.metric("Total Products", total_items)
     with col2:
-        st.metric("Out of Stock", len(out_of_stock), delta_color="inverse")
-    
+        st.metric("Total Items in Stock", total_stock)
     with col3:
-        st.metric("Low Stock", len(low_stock), delta_color="off")
-    
+        st.metric("Low Stock Alerts", low_stock_count, delta=-low_stock_count if low_stock_count > 0 else None)
     with col4:
-        st.metric("Well Stocked", len(well_stocked), delta_color="normal")
+        st.metric("Critical Stock", critical_stock_count, delta=-critical_stock_count if critical_stock_count > 0 else None)
     
-    # Inventory management interface
-    st.subheader("Quick Actions")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        available_items = sorted(list(st.session_state.inventory.keys()))
-        selected_item = st.selectbox("Select Item:", available_items)
-    
-    with col2:
-        action = st.selectbox("Action:", ["Sell", "Restock"])
-    
-    with col3:
-        quantity = st.number_input("Quantity:", min_value=1, value=1, step=1)
-    
-    with col4:
-        st.write("")  # Spacing
-        if st.button("Execute Action", type="primary"):
-            if action == "Sell":
-                new_stock = sell_item(selected_item, quantity)
-                if new_stock >= 0:
-                    st.success(f"Sold {quantity} {selected_item}. Stock now: {new_stock}")
-                    if new_stock <= st.session_state.inventory[selected_item]['reorder_point']:
-                        st.warning(f"{selected_item} is now low in stock!")
-                    if new_stock == 0:
-                        st.error(f"{selected_item} is now OUT OF STOCK!")
-            else:  # Restock
-                new_stock = add_inventory(selected_item, quantity)
-                st.success(f"Added {quantity} {selected_item}. Stock now: {new_stock}")
-            
-            st.rerun()
-    
-    # Show current stock for selected item
-    if selected_item in st.session_state.inventory:
-        item_data = st.session_state.inventory[selected_item]
-        st.info(f"**{selected_item}**: {item_data['current_stock']} in stock | Reorder at: {item_data['reorder_point']} | Sales today: {item_data['sales_today']}")
-    
-    # Visual inventory chart
-    st.subheader("Inventory Levels Chart")
-    fig = create_inventory_chart()
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # Alerts section
-    st.subheader("Inventory Alerts")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if out_of_stock:
-            st.error("**URGENT: Out of Stock Items**")
-            for item in out_of_stock:
-                st.write(f"• {item} - RESTOCK IMMEDIATELY")
-        elif low_stock:
-            st.warning("**Low Stock Warning**")
-            for item in low_stock:
-                current = st.session_state.inventory[item]['current_stock']
-                reorder = st.session_state.inventory[item]['reorder_point']
-                st.write(f"• {item}: {current} left (reorder at {reorder})")
-        else:
-            st.success("**All Items Well Stocked**")
-            st.write("No immediate action needed")
-    
-    with col2:
-        if out_of_stock or low_stock:
-            st.write("**Quick Restock Options**")
-            critical_items = out_of_stock + low_stock
-            
-            for item in critical_items[:5]:  # Show top 5 critical items
-                item_data = st.session_state.inventory[item]
-                needed = max(5, item_data['reorder_point'] - item_data['current_stock'] + 10)
-                
-                if st.button(f"Restock {item} (+{needed})", key=f"restock_{item}"):
-                    add_inventory(item, needed)
-                    st.success(f"Restocked {item} with {needed} units!")
-                    st.rerun()
-        else:
-            st.info("No critical restocking needed at this time.")
-    
-    # Detailed inventory table
-    st.subheader("Detailed Inventory Status")
-    
-    # Prepare data for table
-    inventory_table = []
-    for item, data in st.session_state.inventory.items():
-        current = data['current_stock']
-        reorder = data['reorder_point']
-        max_cap = data['max_capacity']
+    # Inventory status table
+    inventory_data = []
+    for item, data in inventory.items():
+        stock_level = data['current_stock']
+        threshold = data['min_threshold']
         
-        # Status indicator
-        if current == 0:
-            status = "OUT OF STOCK"
-            status_icon = "🔴"
-        elif current <= reorder:
-            status = "LOW STOCK"
-            status_icon = "🟡"
+        if stock_level <= threshold * 0.5:
+            status = "CRITICAL"
+            status_text = "CRITICAL"
+        elif stock_level <= threshold:
+            status = "LOW"
+            status_text = "LOW"
         else:
-            status = "IN STOCK"
-            status_icon = "🟢"
+            status = "GOOD"
+            status_text = "GOOD"
         
-        stock_percentage = (current / max_cap) * 100 if max_cap > 0 else 0
-        
-        inventory_table.append({
-            'Status': status_icon,
-            'Item': item,
-            'Current Stock': current,
-            'Stock %': f"{stock_percentage:.0f}%",
-            'Reorder Point': reorder,
-            'Max Capacity': max_cap,
-            'Sales Today': data['sales_today'],
-            'Status Text': status
+        inventory_data.append({
+            'Product': item,
+            'Current Stock': stock_level,
+            'Min Threshold': threshold,
+            'Max Capacity': data['max_capacity'],
+            'Status': status,
+            'Status_Sort': status_text,  # For sorting
+            'Last Restocked': data['last_restocked'],
+            'Times Restocked Today': data['times_restocked_today']
         })
     
-    # Display table
-    inventory_df = pd.DataFrame(inventory_table)
-    display_columns = ['Status', 'Item', 'Current Stock', 'Stock %', 'Reorder Point', 'Sales Today', 'Status Text']
-    st.dataframe(inventory_df[display_columns], use_container_width=True, hide_index=True)
+    inventory_df = pd.DataFrame(inventory_data)
     
-    # Sales summary for today
-    with st.expander("Today's Sales Summary", expanded=False):
-        total_sales_today = sum([data['sales_today'] for data in st.session_state.inventory.values()])
-        st.metric("Total Items Sold Today", total_sales_today)
+    # Sort by status (Critical first, then Low, then Good)
+    status_order = {'CRITICAL': 0, 'LOW': 1, 'GOOD': 2}
+    inventory_df['Status_Order'] = inventory_df['Status_Sort'].map(status_order)
+    inventory_df = inventory_df.sort_values('Status_Order')
+    
+    # Display inventory table
+    display_inventory = inventory_df[['Product', 'Current Stock', 'Min Threshold', 'Max Capacity', 'Status', 'Times Restocked Today']].copy()
+    st.dataframe(display_inventory, width='stretch', hide_index=True)
+    
+    # Restocking interface
+    st.subheader("Restock Items")
+    
+    # Quick restock for low stock items
+    if low_stock_items:
+        st.markdown("**Quick Restock (Low Stock Items)**")
+        restock_cols = st.columns(min(3, len(low_stock_items)))
         
-        # Top selling items today
-        sales_data = [(item, data['sales_today']) for item, data in st.session_state.inventory.items() if data['sales_today'] > 0]
-        if sales_data:
-            sales_data.sort(key=lambda x: x[1], reverse=True)
-            st.write("**Top Sellers Today:**")
-            for item, sales in sales_data[:5]:
-                st.write(f"• {item}: {sales} sold")
+        for i, item_info in enumerate(low_stock_items[:3]):  # Show up to 3 items
+            with restock_cols[i]:
+                item_name = item_info['Item']
+                current = item_info['Current_Stock']
+                max_cap = inventory[item_name]['max_capacity']
+                suggested_restock = max_cap - current
+                
+                if st.button(f"Restock {item_name}", key=f"quick_restock_{item_name}"):
+                    added = restock_item(st.session_state.inventory, item_name, suggested_restock)
+                    st.success(f"Added {added} {item_name}(s) to inventory!")
+                    st.rerun()
+                
+                st.write(f"Current: {current} | Suggested: +{suggested_restock}")
+    
+    # Manual restocking
+    st.markdown("**Manual Restocking**")
+    restock_col1, restock_col2, restock_col3 = st.columns([2, 1, 1])
+    
+    available_items = list(inventory.keys())
+    
+    with restock_col1:
+        restock_item_select = st.selectbox("Select item to restock:", available_items, key="manual_restock_item")
+    
+    with restock_col2:
+        if restock_item_select:
+            current_stock = inventory[restock_item_select]['current_stock']
+            max_capacity = inventory[restock_item_select]['max_capacity']
+            max_possible = max_capacity - current_stock
+            
+            restock_quantity = st.number_input(
+                f"Quantity (Max: {max_possible}):", 
+                min_value=1, 
+                max_value=max_possible, 
+                value=min(10, max_possible), 
+                step=1,
+                key="manual_restock_qty"
+            )
+    
+    with restock_col3:
+        st.write("")  # Spacing
+        if st.button("Restock Item", type="primary", key="manual_restock_btn"):
+            if restock_item_select:
+                added = restock_item(st.session_state.inventory, restock_item_select, restock_quantity)
+                if added > 0:
+                    st.success(f"Added {added} {restock_item_select}(s) to inventory!")
+                    st.rerun()
+                else:
+                    st.error("Unable to restock - may be at maximum capacity!")
+    
+    # Inventory level visualization
+    if available_items:
+        st.subheader("Inventory Levels Visualization")
+        
+        # Create inventory chart
+        chart_data = []
+        for item, data in inventory.items():
+            chart_data.append({
+                'Item': item,
+                'Current Stock': data['current_stock'],
+                'Min Threshold': data['min_threshold'],
+                'Max Capacity': data['max_capacity']
+            })
+        
+        chart_df = pd.DataFrame(chart_data)
+        
+        fig_inventory = go.Figure()
+        
+        # Add current stock bars
+        fig_inventory.add_trace(go.Bar(
+            name='Current Stock',
+            x=chart_df['Item'],
+            y=chart_df['Current Stock'],
+            marker_color=['red' if stock <= chart_df.loc[i, 'Min Threshold'] * 0.5 
+                         else 'orange' if stock <= chart_df.loc[i, 'Min Threshold']
+                         else 'green' for i, stock in enumerate(chart_df['Current Stock'])],
+            text=chart_df['Current Stock'],
+            textposition='outside'
+        ))
+        
+        # Add threshold line
+        fig_inventory.add_trace(go.Scatter(
+            name='Min Threshold',
+            x=chart_df['Item'],
+            y=chart_df['Min Threshold'],
+            mode='markers+lines',
+            line=dict(color='red', dash='dash'),
+            marker=dict(color='red', size=8)
+        ))
+        
+        # Add capacity line
+        fig_inventory.add_trace(go.Scatter(
+            name='Max Capacity',
+            x=chart_df['Item'],
+            y=chart_df['Max Capacity'],
+            mode='markers+lines',
+            line=dict(color='blue', dash='dot'),
+            marker=dict(color='blue', size=8)
+        ))
+        
+        fig_inventory.update_layout(
+            title='Current Inventory Levels vs Thresholds',
+            xaxis_title='Products',
+            yaxis_title='Quantity',
+            height=500,
+            barmode='group'
+        )
+        fig_inventory.update_xaxes(tickangle=45)
+        
+        st.plotly_chart(fig_inventory, use_container_width=True)
+    
+    # Current recommendations
+    st.subheader("Today's Inventory Recommendations")
+    
+    recommendations = calculate_smart_recommendations(predictions)
+    
+    if not recommendations.empty:
+        # Summary metrics
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            total_expected = recommendations['Expected_Daily_Sales'].sum()
+            st.metric("Expected Total Sales Today", f"{total_expected:.0f} items")
+        with col2:
+            total_recommended = recommendations['Recommended_Daily_Stock'].sum()
+            st.metric("Total Items to Stock", f"{total_recommended:.0f} items")
+        with col3:
+            st.metric("Items We Track", f"{len(recommendations)}")
+        with col4:
+            st.metric("Confidence Level", "95%")
+        
+        # Detailed recommendations table
+        display_df = recommendations[['Item', 'Expected_Daily_Sales', 'Conservative_Estimate', 'Optimistic_Estimate', 'Recommended_Daily_Stock']].copy()
+        display_df = display_df.round(1)
+        display_df.columns = ['Product', 'Expected Sales', 'Low Estimate', 'High Estimate', 'Stock This Many']
+        st.dataframe(display_df, width='stretch', hide_index=True)
+    
+    # Sales recording section
+    st.subheader("Record Your Sales")
+    st.markdown("*Every sale you record helps improve tomorrow's recommendations and updates inventory*")
+    
+    # Get list of items for selection
+    available_items = list(predictions.keys())
+    
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        selected_item = st.selectbox("What did you sell?", available_items)
+    
+    with col2:
+        # Show current stock for selected item
+        if selected_item and selected_item in inventory:
+            current_stock = inventory[selected_item]['current_stock']
+            max_sellable = min(current_stock, 20)  # Limit to current stock or 20
+            quantity_sold = st.number_input("How many?", min_value=1, max_value=max(1, max_sellable), value=1, step=1)
+            st.caption(f"Stock available: {current_stock}")
         else:
-            st.write("No sales recorded yet today.")
+            quantity_sold = st.number_input("How many?", min_value=1, value=1, step=1)
+    
+    with col3:
+        hours_since_last = st.number_input("Hours since last entry:", min_value=0.1, value=1.0, step=0.1)
+    
+    # Record sale button
+    if st.button("Record This Sale", type="primary"):
+        if selected_item in predictions and selected_item in inventory:
+            # Check if we have enough stock
+            if inventory[selected_item]['current_stock'] >= quantity_sold:
+                # Update predictions
+                current_alpha = predictions[selected_item]['alpha']
+                current_beta = predictions[selected_item]['beta']
+                
+                new_alpha, new_beta = update_predictions(
+                    current_alpha, current_beta, quantity_sold, hours_since_last
+                )
+                
+                # Update the predictions in memory
+                st.session_state.smart_predictions[selected_item]['alpha'] = new_alpha
+                st.session_state.smart_predictions[selected_item]['beta'] = new_beta
+                st.session_state.smart_predictions[selected_item]['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Update inventory
+                update_inventory_after_sale(st.session_state.inventory, selected_item, quantity_sold)
+                
+                # Log the sale
+                st.session_state.daily_sales_log.append({
+                    'Time': datetime.now().strftime('%H:%M'),
+                    'Product': selected_item,
+                    'Quantity': quantity_sold,
+                    'Hours_Since_Last': hours_since_last
+                })
+                
+                st.success(f"Recorded: {quantity_sold} {selected_item}(s) sold! Inventory updated.")
+                st.rerun()
+            else:
+                st.error(f"Not enough stock! Only {inventory[selected_item]['current_stock']} {selected_item}(s) available.")
+    
+    # Quick sale buttons for popular items
+    st.subheader("Quick Sale Buttons")
+    st.markdown("*One-click recording for your best sellers*")
+    
+    # Get top 6 most popular items
+    if not recommendations.empty:
+        top_items = recommendations.nlargest(6, 'Expected_Daily_Sales')['Item'].tolist()
+        
+        cols = st.columns(3)
+        for i, item in enumerate(top_items):
+            col_idx = i % 3
+            with cols[col_idx]:
+                # Show stock level in button
+                stock_level = inventory[item]['current_stock'] if item in inventory else 0
+                button_text = f"Sell 1 {item} (Stock: {stock_level})"
+                
+                if stock_level > 0:
+                    if st.button(button_text, key=f"quick_sale_{item}"):
+                        # Record quick sale
+                        current_alpha = predictions[item]['alpha']
+                        current_beta = predictions[item]['beta']
+                        
+                        new_alpha, new_beta = update_predictions(current_alpha, current_beta, 1, 1.0)
+                        
+                        st.session_state.smart_predictions[item]['alpha'] = new_alpha
+                        st.session_state.smart_predictions[item]['beta'] = new_beta
+                        st.session_state.smart_predictions[item]['last_updated'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                        
+                        # Update inventory
+                        update_inventory_after_sale(st.session_state.inventory, item, 1)
+                        
+                        st.session_state.daily_sales_log.append({
+                            'Time': datetime.now().strftime('%H:%M'),
+                            'Product': item,
+                            'Quantity': 1,
+                            'Hours_Since_Last': 1.0
+                        })
+                        
+                        st.success(f"Recorded: 1 {item} sold!")
+                        st.rerun()
+                else:
+                    st.button(f"OUT OF STOCK - {item}", disabled=True, key=f"oos_{item}")
+    
+    # Sales confidence visualization
+    st.subheader("Sales Confidence Analysis")
+    
+    if available_items:
+        selected_viz_item = st.selectbox("Select product to see detailed sales prediction:", available_items)
+        
+        if selected_viz_item in predictions:
+            alpha = predictions[selected_viz_item]['alpha']
+            beta = predictions[selected_viz_item]['beta']
+            
+            # Generate prediction range
+            x = np.linspace(0, stats.gamma.ppf(0.99, alpha, scale=1/beta) * 1.5, 1000)
+            y = stats.gamma.pdf(x, alpha, scale=1/beta)
+            
+            # Create prediction chart
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x, y=y, mode='lines', name='Sales Prediction Range',
+                                   line=dict(color='blue', width=2)))
+            
+            # Add expected sales line
+            expected = alpha / beta
+            fig.add_vline(x=expected, line_dash="dash", line_color="red",
+                         annotation_text=f"Most Likely Sales: {expected:.1f}")
+            
+            # Add confidence range
+            lower = stats.gamma.ppf(0.025, alpha, scale=1/beta)
+            upper = stats.gamma.ppf(0.975, alpha, scale=1/beta)
+            fig.add_vrect(x0=lower, x1=upper, fillcolor="rgba(0,100,255,0.1)",
+                         annotation_text="95% Confidence Range")
+            
+            fig.update_layout(
+                title=f'Sales Prediction for {selected_viz_item}',
+                xaxis_title='Number of Items Expected to Sell',
+                yaxis_title='Confidence Level',
+                height=400
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Show simple statistics with inventory info
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Most Likely Sales", f"{expected:.1f} items")
+            with col2:
+                variance = alpha / (beta ** 2)
+                st.metric("Prediction Accuracy", "High" if variance < expected else "Moderate")
+            with col3:
+                st.metric("Recommendation", f"Stock {upper:.0f} items")
+            with col4:
+                current_stock = inventory[selected_viz_item]['current_stock'] if selected_viz_item in inventory else 0
+                st.metric("Current Stock", f"{current_stock} items")
+    
+    # Today's sales log
+    with st.expander("Today's Sales Log", expanded=False):
+        if st.session_state.daily_sales_log:
+            sales_df = pd.DataFrame(st.session_state.daily_sales_log)
+            st.dataframe(sales_df, width='stretch', hide_index=True)
+            
+            # Quick summary
+            total_today = sum([sale['Quantity'] for sale in st.session_state.daily_sales_log])
+            st.write(f"**Total items sold today: {total_today}**")
+        else:
+            st.write("No sales recorded yet today. Start recording to improve your recommendations!")
+    
+    # How recommendations changed
+    st.subheader("How Your Recommendations Have Changed")
+    
+    if available_items and not historical_df.empty:
+        comparison_data = []
+        historical_predictions = initialize_smart_predictions(historical_df)
+        
+        for item in available_items[:10]:  # Show top 10 for clarity
+            if item in historical_predictions:
+                original_prediction = historical_predictions[item]['alpha'] / historical_predictions[item]['beta']
+                current_prediction = predictions[item]['alpha'] / predictions[item]['beta']
+                
+                comparison_data.append({
+                    'Product': item,
+                    'Original_Prediction': original_prediction,
+                    'Current_Prediction': current_prediction,
+                    'Change': current_prediction - original_prediction
+                })
+        
+        if comparison_data:
+            comp_df = pd.DataFrame(comparison_data)
+            
+            fig_comp = go.Figure()
+            fig_comp.add_trace(go.Bar(name='Original Prediction', x=comp_df['Product'], y=comp_df['Original_Prediction'],
+                                     marker_color='lightblue'))
+            fig_comp.add_trace(go.Bar(name='Updated Prediction', x=comp_df['Product'], y=comp_df['Current_Prediction'],
+                                     marker_color='darkblue'))
+            
+            fig_comp.update_layout(
+                title='How Sales Predictions Have Changed Today',
+                xaxis_title='Products',
+                yaxis_title='Expected Daily Sales',
+                barmode='group',
+                height=400
+            )
+            fig_comp.update_xaxes(tickangle=45)
+            
+            st.plotly_chart(fig_comp, use_container_width=True)
+    
+    # Simple explanation
+    with st.expander("How This Smart System Helps Your Business", expanded=False):
+        st.write("**What This System Does for You:**")
+        st.write("• **Reduces Waste**: Helps you stock the right amounts so you don't overbake")
+        st.write("• **Prevents Stockouts**: Makes sure you have enough of your popular items")
+        st.write("• **Tracks Inventory**: Real-time monitoring of stock levels with low-stock alerts")
+        st.write("• **Learns Your Patterns**: Gets smarter about your unique customer preferences")
+        st.write("• **Adapts to Changes**: Adjusts recommendations based on today's actual sales")
+        st.write("")
+        st.write("**How to Use It Effectively:**")
+        st.write("• Check inventory alerts each morning and restock as needed")
+        st.write("• Record sales throughout the day, not just at closing")
+        st.write("• Use the quick buttons for your most common items")
+        st.write("• Monitor the inventory visualization to plan restocking")
+        st.write("• The system works best with consistent daily use")
+        st.write("")
+        st.write("**Why It Gets Better Over Time:**")
+        st.write("• More data = more accurate predictions")
+        st.write("• Learns seasonal changes in customer preferences")
+        st.write("• Adapts to new products and changing popularity")
+        st.write("• Balances historical patterns with recent trends")
+        st.write("• Optimizes inventory levels to reduce waste and stockouts")
 
 # Main app
 def main():
-    st.set_page_config(page_title="Inventory Tracker", layout="wide")
-    main_inventory_tracker()
+    st.set_page_config(page_title="Smart Inventory Tracker", layout="wide")
+    main_smart_dashboard()
 
 if __name__ == "__main__":
     main()
