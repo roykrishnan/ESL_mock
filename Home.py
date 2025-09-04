@@ -122,7 +122,7 @@ def create_sales_trends(df, start_date, end_date, selected_item, selected_daypar
 def main_dashboard(df):
     # Display logo
     try:
-        st.image("logo.png", width=200)
+        st.image("images/logo.png", width=200)
     except:
         pass  # Continue without logo if file not found
     
