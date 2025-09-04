@@ -165,12 +165,25 @@ def main_smart_dashboard():
         st.error("No historical data available for smart predictions.")
         return
     
-    # Initialize session state properly
-    if 'initialized' not in st.session_state:
+    # Initialize session state with defensive checks
+    if ('initialized' not in st.session_state or 
+        'inventory' not in st.session_state or 
+        'smart_predictions' not in st.session_state):
+        
         historical_predictions = initialize_smart_predictions(historical_df)
         st.session_state.smart_predictions = historical_predictions.copy()
         st.session_state.inventory = initialize_inventory(historical_df)
         st.session_state.initialized = True
+        st.session_state.daily_sales_log = []
+    
+    # Defensive access to session state - reinitialize if missing
+    if 'smart_predictions' not in st.session_state:
+        st.session_state.smart_predictions = initialize_smart_predictions(historical_df)
+    
+    if 'inventory' not in st.session_state:
+        st.session_state.inventory = initialize_inventory(historical_df)
+    
+    if 'daily_sales_log' not in st.session_state:
         st.session_state.daily_sales_log = []
     
     # Now safely access session state
@@ -179,7 +192,7 @@ def main_smart_dashboard():
     
     # Sidebar information
     try:
-        st.sidebar.image('logo.png', width=150)
+        st.sidebar.image("logo.png", width=200)
     except:
         pass
     
