@@ -193,7 +193,7 @@ def main_smart_dashboard():
     try:
         st.sidebar.image("logo.png", width=200)
     except Exception:
-        st.sidebar.markdown("### Sweet & Savory Bakery")
+        pass
 
     st.sidebar.title("How This Works")
     st.sidebar.write("**Smart Learning System**")
