@@ -13,7 +13,7 @@ import random
 def load_historical_data():
     """Load historical data to establish smart predictions"""
     try:
-        df = pd.read_csv('/Users/rohitkrishnan/Desktop/Assesments:Projects/ESL/BakeryDash/Bakery.csv')
+        df = pd.read_csv('Bakery.csv')
         df['DateTime'] = pd.to_datetime(df['DateTime'])
         df['Date'] = df['DateTime'].dt.date
         return df
@@ -178,7 +178,7 @@ def main_smart_dashboard():
     # Sidebar information
     # Display logo in sidebar
     try:
-        st.sidebar.image("/Users/rohitkrishnan/Desktop/Assesments:Projects/ESL/BakeryDash/images/logo.png", width=150)
+        st.sidebar.image("logo.png", width=200)
     except:
         pass
     
