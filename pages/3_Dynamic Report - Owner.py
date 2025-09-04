@@ -191,9 +191,9 @@ def main_smart_dashboard():
     inventory = st.session_state.inventory
     
     # Sidebar information
-    try:
-        st.sidebar.image("logo.png", width=200)
-    except:
+     try:
+        st.logo("logo.png")
+    except Exception:
         pass
     
     st.sidebar.title("How This Works")
