@@ -194,7 +194,7 @@ def main_smart_dashboard():
     try:
         st.sidebar.image("logo.png", width=200)
     except:
-        pass
+        st.sidebar.image("../images/logo.png", width=200)
     
     st.sidebar.title("How This Works")
     st.sidebar.write("**Smart Learning System**")
