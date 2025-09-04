@@ -130,7 +130,7 @@ def main_smart_dashboard():
     # Sidebar information
     # Display logo in sidebar
     try:
-        st.sidebar.image('logo.png', width=150)
+        st.sidebar.image('images/logo.png', width=150)
     except:
         pass
     
