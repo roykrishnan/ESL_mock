@@ -5,6 +5,12 @@ import plotly.graph_objects as go
 import numpy as np
 from datetime import datetime, date, timedelta
 
+
+try:
+    st.sidebar.image("images/logo.png", width=200)
+except Exception:
+    pass
+
 # Initialize mock inventory data
 @st.cache_data
 def initialize_mock_inventory():
