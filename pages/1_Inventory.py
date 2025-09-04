@@ -155,9 +155,9 @@ def calculate_inventory_recommendations(df, predictions):
 def main_inventory_dashboard():
     # Display logo
     try:
-        st.image('logo.png', width=200)
+        st.sidebar.image('logo.png', width=200)
     except:
-        pass  # Continue without logo if file not found
+        pass
     
     st.title("Sweet & Savory Bakery - Inventory Prediction Dashboard")
     st.markdown("*Predictive analytics for optimal inventory management*")
