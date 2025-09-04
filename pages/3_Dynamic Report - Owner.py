@@ -190,12 +190,11 @@ def main_smart_dashboard():
     predictions = st.session_state.smart_predictions
     inventory = st.session_state.inventory
     
-    # Sidebar information
-     try:
-        st.logo("logo.png")
+    try:
+        st.sidebar.image("logo.png", width=200)
     except Exception:
-        pass
-    
+        st.sidebar.markdown("### Sweet & Savory Bakery")
+
     st.sidebar.title("How This Works")
     st.sidebar.write("**Smart Learning System**")
     st.sidebar.write("This system learns from your sales patterns and gets smarter over time.")
