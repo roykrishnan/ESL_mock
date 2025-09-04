@@ -14,7 +14,7 @@ warnings.filterwarnings('ignore')
 def load_data():
     """Load the bakery transaction data from CSV file"""
     try:
-        df = pd.read_csv('/Users/rohitkrishnan/Desktop/Assesments:Projects/ESL/BakeryDash/Bakery.csv')
+        df = pd.read_csv('Bakery.csv')
         # Ensure DateTime column is properly formatted
         df['DateTime'] = pd.to_datetime(df['DateTime'])
         df['Date'] = df['DateTime'].dt.date
